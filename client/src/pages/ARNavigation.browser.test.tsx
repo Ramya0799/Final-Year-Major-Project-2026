@@ -2,6 +2,8 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { campusEdges, campusNodes, getNode } from "@shared/pathfinder";
+import { bearingDegrees, calculateRoute } from "@shared/routing";
 import ARNavigation from "./ARNavigation";
 
 const getUserMediaSpy = vi.hoisted(() => vi.fn());
@@ -31,8 +33,22 @@ beforeEach(() => {
   Object.defineProperty(window, "isSecureContext", { configurable: true, value: true });
 });
 
+function installOrientationSupport({ absoluteEvent }: { absoluteEvent: boolean }) {
+  Object.defineProperty(window, "DeviceOrientationEvent", { configurable: true, writable: true, value: class {} });
+  if (absoluteEvent) Object.defineProperty(window, "ondeviceorientationabsolute", { configurable: true, writable: true, value: null });
+}
+
+function fireOrientation(type: string, reading: { alpha: number; beta: number; gamma: number; absolute: boolean }, times = 1) {
+  act(() => {
+    for (let index = 0; index < times; index += 1) window.dispatchEvent(Object.assign(new Event(type), reading));
+  });
+}
+
 afterEach(() => {
   cleanup();
+  delete (window as Partial<Window> & { DeviceOrientationEvent?: unknown }).DeviceOrientationEvent;
+  delete (window as { ondeviceorientationabsolute?: unknown }).ondeviceorientationabsolute;
+  window.history.replaceState({}, "", "/");
   vi.restoreAllMocks();
   getUserMediaSpy.mockReset();
   getCurrentPositionSpy.mockReset();
@@ -99,5 +115,52 @@ describe("AR navigation", () => {
 
     await act(async () => success?.({ coords: { latitude: 13.0219, longitude: 74.98128, accuracy: 5, altitude: null, altitudeAccuracy: null, heading: null, speed: null, toJSON: () => ({}) }, timestamp: Date.now(), toJSON: () => ({}) } as GeolocationPosition));
     expect(await screen.findByText(/GPS connected · ±5 m/i)).toBeTruthy();
+  });
+
+  it("turns the arrow the right way from a north-referenced compass reading", async () => {
+    const user = userEvent.setup();
+    installOrientationSupport({ absoluteEvent: true });
+    const route = calculateRoute(campusNodes, campusEdges, "gate", "library");
+    const target = bearingDegrees(getNode(route.nodeIds[0])!, getNode(route.nodeIds[1])!);
+    // Upright phone: camera heading = 360 - alpha.
+    const alphaFacing = (heading: number) => (360 - heading + 360) % 360;
+    render(<ARNavigation />);
+    await user.click(screen.getByRole("button", { name: /Enable camera & location/i }));
+    await waitFor(() => expect(screen.getByText("AR route · Central Library")).toBeTruthy());
+
+    fireOrientation("deviceorientationabsolute", { alpha: alphaFacing(target), beta: 90, gamma: 0, absolute: true });
+    expect(screen.getAllByText("Continue straight").length).toBeGreaterThan(0);
+
+    // Facing 90° to the right of the route means the user must turn left.
+    fireOrientation("deviceorientationabsolute", { alpha: alphaFacing(target + 90), beta: 90, gamma: 0, absolute: true }, 40);
+    expect(screen.getAllByText("Turn left").length).toBeGreaterThan(0);
+
+    fireOrientation("deviceorientationabsolute", { alpha: alphaFacing(target - 90), beta: 90, gamma: 0, absolute: true }, 40);
+    expect(screen.getAllByText("Turn right").length).toBeGreaterThan(0);
+  });
+
+  it("does not point the arrow from orientation data that is not tied to north", async () => {
+    const user = userEvent.setup();
+    installOrientationSupport({ absoluteEvent: false });
+    render(<ARNavigation />);
+    await user.click(screen.getByRole("button", { name: /Enable camera & location/i }));
+    await waitFor(() => expect(screen.getByText("AR route · Central Library")).toBeTruthy());
+
+    fireOrientation("deviceorientation", { alpha: 45, beta: 90, gamma: 0, absolute: false });
+    expect(screen.getByText("heading unavailable")).toBeTruthy();
+    expect(screen.getByText(/reports motion but not a compass direction/i)).toBeTruthy();
+    expect(screen.getByRole("img", { name: /Direction unavailable until compass is ready/i })).toBeTruthy();
+  });
+
+  it("uses the route from the link and ignores an invalid saved destination", () => {
+    sessionStorage.setItem("pathfinder-destination", "not-a-destination");
+    window.history.replaceState({}, "", "/ar?source=gate&destination=d13");
+    render(<ARNavigation />);
+    expect(screen.getByRole("heading", { name: /Follow your route to Cafeteria/i })).toBeTruthy();
+
+    cleanup();
+    window.history.replaceState({}, "", "/ar");
+    render(<ARNavigation />);
+    expect(screen.getByRole("heading", { name: /Follow your route to Central Library/i })).toBeTruthy();
   });
 });

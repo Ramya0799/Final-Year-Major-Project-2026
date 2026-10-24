@@ -1,5 +1,24 @@
-import type { Express } from "express";
+import type { Express, Response } from "express";
+import fs from "node:fs";
+import path from "node:path";
 import { ENV } from "./env";
+
+// Local copies of storage files, checked before Manus storage. Put files in
+// client/public/manus-storage/ (the build copies them to dist/public/manus-storage/).
+const LOCAL_STORAGE_DIRS = [
+  path.resolve(import.meta.dirname, "../..", "client", "public", "manus-storage"),
+  path.resolve(import.meta.dirname, "public", "manus-storage"),
+];
+
+function sendLocalCopy(key: string, res: Response) {
+  const dir = LOCAL_STORAGE_DIRS.find((candidate) => {
+    const file = path.resolve(candidate, key);
+    return file.startsWith(candidate + path.sep) && fs.existsSync(file);
+  });
+  if (!dir) return false;
+  res.sendFile(key, { root: dir });
+  return true;
+}
 
 export function registerStorageProxy(app: Express) {
   app.get("/manus-storage/*", async (req, res) => {
@@ -9,8 +28,10 @@ export function registerStorageProxy(app: Express) {
       return;
     }
 
+    if (sendLocalCopy(key, res)) return;
+
     if (!ENV.forgeApiUrl || !ENV.forgeApiKey) {
-      res.status(500).send("Storage proxy not configured");
+      res.status(404).send("Not available locally. Add the file to client/public/manus-storage/ or set BUILT_IN_FORGE_API_URL and BUILT_IN_FORGE_API_KEY.");
       return;
     }
 

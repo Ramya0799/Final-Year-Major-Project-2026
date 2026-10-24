@@ -8,6 +8,15 @@ import App from "./App";
 import { startLogin } from "./const";
 import "./index.css";
 
+// Campus photos come from Manus storage. When a photo can't be loaded (for example, a
+// local run without storage access), hide it instead of showing a broken-image icon.
+window.addEventListener("error", (event) => {
+  if (event.target instanceof HTMLImageElement && event.target.src.includes("/manus-storage/")) event.target.style.visibility = "hidden";
+}, true);
+window.addEventListener("load", (event) => {
+  if (event.target instanceof HTMLImageElement) event.target.style.visibility = "";
+}, true);
+
 const queryClient = new QueryClient();
 
 const redirectToLoginIfUnauthorized = (error: unknown) => {

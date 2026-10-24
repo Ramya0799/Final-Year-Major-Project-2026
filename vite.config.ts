@@ -150,7 +150,29 @@ function vitePluginManusDebugCollector(): Plugin {
   };
 }
 
-const plugins = [react(), tailwindcss(), jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector()];
+/**
+ * Removes the Umami analytics tag from index.html when VITE_ANALYTICS_ENDPOINT is not set
+ * (for example, local runs without a .env). Otherwise the browser requests the literal
+ * "/%VITE_ANALYTICS_ENDPOINT%/umami", which the server rejects as a malformed URL.
+ */
+function optionalAnalyticsPlugin(): Plugin {
+  let analyticsEndpoint: string | undefined;
+  return {
+    name: "optional-analytics",
+    configResolved(config) {
+      analyticsEndpoint = config.env.VITE_ANALYTICS_ENDPOINT;
+    },
+    transformIndexHtml: {
+      order: "pre",
+      handler(html) {
+        if (analyticsEndpoint) return html;
+        return html.replace(/\s*<script[^>]*%VITE_ANALYTICS_ENDPOINT%[^>]*><\/script>/, "");
+      },
+    },
+  };
+}
+
+const plugins = [react(), tailwindcss(), jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector(), optionalAnalyticsPlugin()];
 
 export default defineConfig({
   plugins,
